@@ -23,12 +23,19 @@ async def fetch_and_sanitize_diff(pr_url: str) -> str:
         "User-Agent": "FastAPI-PR-Walkthrough"
     }
     if settings.GITHUB_TOKEN:
-        headers["Authorization"] = f"token {settings.GITHUB_TOKEN}"
+        headers["Authorization"] = f"Bearer {settings.GITHUB_TOKEN}"
 
     async with httpx.AsyncClient(follow_redirects=True) as client:
         response = await client.get(api_url, headers=headers)
         if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail="Failed to fetch diff from GitHub.")
+            if response.status_code == 403:
+                detail = "GitHub API rate limit exceeded or access forbidden. Verify your GITHUB_TOKEN on Render."
+            elif response.status_code == 404:
+                detail = "PR not found. Ensure the repository is public or your GITHUB_TOKEN has private repo access."
+            else:
+                detail = f"Failed to fetch diff from GitHub (HTTP {response.status_code})."
+            raise HTTPException(status_code=response.status_code, detail=detail)
+            
         raw_diff = response.text
 
     # Sanitize boilerplate and strip git headers
@@ -42,18 +49,25 @@ async def fetch_and_sanitize_diff(pr_url: str) -> str:
             if current_file_diff and not skip_file:
                 sanitized_chunks.append(f"File: {file_name}\n" + "\n".join(current_file_diff))
 
-            parts = line.split(" b/")
-            file_name = parts[-1] if len(parts) > 1 else "Unknown"
+            file_match = re.search(r"b/(.+)$", line)
+            file_name = file_match.group(1) if file_match else "Unknown"
 
             current_file_diff = []
             skip_file = is_boilerplate(file_name)
 
         elif not skip_file:
-            if line.startswith("index ") or line.startswith("--- a/") or line.startswith("+++ b/") or line.startswith("@@ "):
+            if line.startswith(("index ", "--- a/", "+++ b/", "@@ ")):
                 continue
             current_file_diff.append(line)
 
     if current_file_diff and not skip_file:
         sanitized_chunks.append(f"File: {file_name}\n" + "\n".join(current_file_diff))
 
-    return "\n\n".join(sanitized_chunks)
+    sanitized_diff = "\n\n".join(sanitized_chunks)
+    if not sanitized_diff.strip():
+        raise HTTPException(
+            status_code=400, 
+            detail="No relevant code changes found in this PR after filtering lockfiles and build assets."
+        )
+
+    return sanitized_diff
