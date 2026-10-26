@@ -9,7 +9,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust for production frontend URL
+    allow_origins=[
+        "http://localhost:3000",
+        "https://pr-walkthrough-frontend-two.vercel.app"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
